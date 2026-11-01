@@ -11,8 +11,8 @@ const TABS = [
 
 export function Shell({ children }: { children: ReactNode }) {
   const path = usePathname();
-  const [ok, setOk] = useState(false);
-  useEffect(() => { api('/api/me').then(() => setOk(true)).catch(() => {}); }, []);
+  const [ok, setOk] = useState(false); const [demo, setDemo] = useState(false);
+  useEffect(() => { api('/api/me').then(() => { setOk(true); return api('/api/account').then((a) => setDemo(!!a.demo)).catch(() => {}); }).catch(() => {}); }, []);
   if (path === '/login') return <>{children}</>;
   if (!ok) return <div className="p-10 text-center text-muted">…</div>;
   return (
@@ -23,6 +23,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <Link href="/account" className="text-xs text-muted">الحساب</Link>
         </div>
       </header>
+      {demo && <div role="status" className="border-b border-warn/40 bg-warn/10 px-4 py-2 text-center text-xs text-warn">وضع تجريبي: TikTok وهمي — لا يُنشر شيء على حسابك الحقيقي</div>}
       <main className="mx-auto max-w-3xl px-4 py-4">{children}</main>
       <nav aria-label="التنقل" className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
         <ul className="mx-auto grid max-w-3xl grid-cols-5">

@@ -150,11 +150,20 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
       return reply.redirect(`${cfg.PUBLIC_WEB_URL}/account?error=${encodeURIComponent(msg)}`);
     }
   });
+  if (cfg.DEMO_TIKTOK) {
+    // صفحة موافقة وهمية تحل محل صفحة TikTok في الوضع التجريبي: تعيد التوجيه إلى redirect_uri المضبوط فقط (لا open redirect)
+    app.get('/demo/tiktok/authorize/', async (req, reply) => {
+      const q = req.query as Record<string, string>;
+      if (q.redirect_uri !== cfg.TIKTOK_REDIRECT_URI) return reply.code(400).send({ error: 'bad_redirect', message: 'redirect_uri غير مطابق' });
+      const u = new URL(cfg.TIKTOK_REDIRECT_URI); u.searchParams.set('code', 'good-code'); u.searchParams.set('state', q.state ?? '');
+      return reply.redirect(u.toString());
+    });
+  }
   app.get('/api/account', async (req, reply) => {
     if (!(await need(req, reply, 'read'))) return;
     const acc = await db.tikTokAccount.findFirst({ orderBy: { connectedAt: 'desc' } });
-    if (!acc) return { connected: false, config: { clientKeySet: !!cfg.TIKTOK_CLIENT_KEY, scopes: cfg.scopes, redirectUri: cfg.TIKTOK_REDIRECT_URI } };
-    return { connected: acc.status === 'ACTIVE', account: AccountService.publicView(acc), config: { scopes: cfg.scopes, redirectUri: cfg.TIKTOK_REDIRECT_URI } };
+    if (!acc) return { connected: false, demo: cfg.DEMO_TIKTOK, config: { clientKeySet: !!cfg.TIKTOK_CLIENT_KEY, scopes: cfg.scopes, redirectUri: cfg.TIKTOK_REDIRECT_URI } };
+    return { connected: acc.status === 'ACTIVE', demo: cfg.DEMO_TIKTOK, account: AccountService.publicView(acc), config: { scopes: cfg.scopes, redirectUri: cfg.TIKTOK_REDIRECT_URI } };
   });
   app.post('/api/account/refresh', async (req, reply) => {
     if (!(await need(req, reply, 'post:write'))) return;
@@ -306,7 +315,7 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
     const b = draftSchema.parse(req.body);
     const post = await c.posts.createDraft({ ...b, accountId: await accountIdOf(b.accountId), scheduledAt: resolveSchedule(b) ?? null }, actorOf(p));
     const preview = await c.posts.requestApproval(post.id, actorOf(p));
-    return reply.code(201).send({ preview, approvalUrl: approvalUrl(post.id), nextStep: 'اعرض المعاينة على المستخدم واطلب موافقته الصريحة. الموافقة من اللوحة، أو من المحادثة إن كان الرمز يملك post:approve.' });
+    return reply.code(201).send({ demo: cfg.DEMO_TIKTOK, preview, approvalUrl: approvalUrl(post.id), nextStep: 'اعرض المعاينة على المستخدم واطلب موافقته الصريحة. الموافقة من اللوحة، أو من المحادثة إن كان الرمز يملك post:approve.' });
   });
   app.get('/api/posts', async (req, reply) => {
     if (!(await need(req, reply, 'read'))) return;
@@ -369,7 +378,7 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
     const id = (req.params as { id: string }).id;
     const status = await c.publisher.checkStatus(id);
     const post = await db.post.findUniqueOrThrow({ where: { id } });
-    return { status, publishId: post.publishId, tiktokPostId: post.tiktokPostId, failReason: post.failReason, confirmedByTikTok: status === 'PUBLISHED' || status === 'INBOX_DELIVERED' };
+    return { demo: cfg.DEMO_TIKTOK, status, publishId: post.publishId, tiktokPostId: post.tiktokPostId, failReason: post.failReason, confirmedByTikTok: status === 'PUBLISHED' || status === 'INBOX_DELIVERED' };
   });
 
   // ---------- الذكاء الاصطناعي والوقت ----------

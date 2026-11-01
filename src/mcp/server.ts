@@ -16,6 +16,7 @@ const wrap = <A>(fn: (a: A) => Promise<unknown>) => async (a: A) => { try { retu
 /** مثل wrap لكن يُرجع صور معاينة (images) ليراها Claude ويُقيّم تصميمه */
 const wrapImg = <A>(fn: (a: A) => Promise<{ data: unknown; images: string[] }>) => async (a: A) => { try { const r = await fn(a); return ok(r.data, r.images); } catch (e) { return fail(e); } };
 
+const DEMO_NOTE = 'وضع تجريبي: TikTok وهمي، لا يصل أي شيء إلى حساب TikTok الحقيقي. لا تقل للمستخدم إنه «نُشر على TikTok»؛ قل إنه نُشر في الوضع التجريبي.';
 const DESIGN = `إرشادات التصميم: اللوحة 1080×1920 (9:16). اكتب HTML كاملاً بـCSS مضمَّناً في الصفحة فقط (style داخل الوثيقة). المحظور: JavaScript وأي ملف/خط/صورة خارجية (تُجهَض كلها)؛ المسموح: SVG مضمَّناً وصور data:. العربية: <html lang="ar" dir="rtl">، الخط font-family:'Noto Sans Arabic',Tahoma,sans-serif، نص كبير (≥64px) بتباين عالٍ. اترك هامشاً آمناً ~160px أعلى وأسفل لأن واجهة TikTok تغطيها. المخرجات تعود إليك كصورة معاينة: راجعها وعدّل التصميم إن لزم قبل المتابعة.`;
 
 const privacy = z.enum(['SELF_ONLY', 'PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR']);
@@ -43,7 +44,7 @@ export function buildMcpServer(api: ApiClient, opts: McpOpts) {
       throw new ApiError(400, `نوع المحتوى ${r.preview.type} لا يطابق الأداة المطلوبة (${expect})`);
     }
     return {
-      published: false, status: r.preview.status, post_id: r.preview.id, content_hash: r.preview.contentHash, preview: r.preview, approval_url: r.approvalUrl,
+      published: false, ...(r.demo ? { demo_mode: true, demo_note: DEMO_NOTE } : {}), status: r.preview.status, post_id: r.preview.id, content_hash: r.preview.contentHash, preview: r.preview, approval_url: r.approvalUrl,
       next: opts.enableApproval
         ? 'اعرض المعاينة للمستخدم؛ إن وافق صراحةً استدعِ approve_tiktok_post بنفس content_hash. وإلا يوافق من approval_url.'
         : 'اعرض المعاينة للمستخدم واطلب منه الموافقة من approval_url على هاتفه. لن يُنشر شيء قبل ذلك.',
@@ -96,16 +97,16 @@ export function buildMcpServer(api: ApiClient, opts: McpOpts) {
     const d = await api.get(`/api/posts/${a.post_id}`);
     const status = r?.status ?? d.post.status;
     return {
-      post_id: a.post_id, status, confirmed_by_tiktok: status === 'PUBLISHED', delivered_to_tiktok_inbox: status === 'INBOX_DELIVERED', tiktok_post_id: d.post.tiktokPostId, publish_id: d.post.publishId,
+      post_id: a.post_id, ...(r?.demo ? { demo_mode: true, demo_note: DEMO_NOTE } : {}), status, confirmed_by_tiktok: status === 'PUBLISHED' && !r?.demo, confirmed_by_demo_server: status === 'PUBLISHED' && !!r?.demo, delivered_to_tiktok_inbox: status === 'INBOX_DELIVERED', tiktok_post_id: d.post.tiktokPostId, publish_id: d.post.publishId,
       fail_reason: d.post.failReason, scheduled_at: d.post.scheduledAt, approval_url: d.approvalUrl, last_events: d.events.slice(-5).map((e: any) => `${e.event}`),
     };
   }));
   s.registerTool('get_tiktok_account_info', { title: 'معلومات الحساب', description: 'الحساب المربوط، الصلاحيات، خيارات الخصوصية المسموحة، وهل التطبيق معتمد.', inputSchema: {} },
     wrap(async () => {
       const r = await api.get('/api/account');
-      if (!r.connected) return { connected: false, note: 'لا يوجد حساب مربوط. اربطه من لوحة التحكم.' };
+      if (!r.connected) return { connected: false, ...(r.demo ? { demo_mode: true, demo_note: DEMO_NOTE } : {}), note: 'لا يوجد حساب مربوط. اربطه من لوحة التحكم.' };
       const a = r.account;
-      return { connected: true, display_name: a.displayName, username: a.username, scopes: a.scopes, app_audited: a.audited, privacy_options: a.creatorInfo?.privacy_level_options, max_video_sec: a.creatorInfo?.max_video_post_duration_sec,
+      return { connected: true, ...(r.demo ? { demo_mode: true, demo_note: DEMO_NOTE } : {}), display_name: a.displayName, username: a.username, scopes: a.scopes, app_audited: a.audited, privacy_options: a.creatorInfo?.privacy_level_options, max_video_sec: a.creatorInfo?.max_video_post_duration_sec,
         warning: a.audited ? undefined : 'التطبيق غير معتمد: المنشورات المباشرة ستكون SELF_ONLY فقط' };
     }));
   s.registerTool('list_tiktok_posts', { title: 'قائمة المنشورات', description: 'يعرض سجل المنشورات.', inputSchema: { status: z.string().optional().describe('حالات مفصولة بفواصل، مثل PUBLISHED,SCHEDULED'), limit: z.number().int().min(1).max(100).default(20) } },

@@ -14,6 +14,7 @@ function PostInner() {
   const [msg, setMsg] = useState<{ t: 'ok' | 'bad' | 'info'; s: string } | null>(null);
   const [ack, setAck] = useState(false); const [busy, setBusy] = useState(false);
   const [edit, setEdit] = useState(false); const [cap, setCap] = useState(''); const [tags, setTags] = useState(''); const [when, setWhen] = useState('');
+  const demo = !!useApi<any>('/api/account').data?.demo;
   const status = data?.post?.status as string | undefined;
   const checking = useRef(false);
 
@@ -37,7 +38,7 @@ function PostInner() {
       <PageTitle sub={`${TYPE_AR[post.type]} · ${post.mode === 'DIRECT' ? 'نشر مباشر' : 'مسودة صندوق TikTok'}`}>تفاصيل المنشور</PageTitle>
       <div className="flex items-center gap-2"><StatusBadge status={post.status} />{pv.aiGenerated && <Badge tone="warn">محتوى AI</Badge>}</div>
 
-      {post.status === 'PUBLISHED' && <Notice tone="ok">أكّدت TikTok نشر المنشور {post.tiktokPostId ? `(معرّف ${post.tiktokPostId})` : ''} ✓</Notice>}
+      {post.status === 'PUBLISHED' && (demo ? <Notice tone="warn">اكتمل في الوضع التجريبي (TikTok وهمي) — <b>لم يُنشر على حسابك الحقيقي</b>.</Notice> : <Notice tone="ok">أكّدت TikTok نشر المنشور {post.tiktokPostId ? `(معرّف ${post.tiktokPostId})` : ''} ✓</Notice>)}
       {post.status === 'INBOX_DELIVERED' && <Notice tone="ok">سُلّم كمسودة إلى صندوق TikTok. <b>لم يُنشر بعد</b>: افتح تطبيق TikTok وأكمل النشر من إشعار المسودات.</Notice>}
       {post.status === 'PROCESSING' && <Notice tone="info">TikTok تعالج المنشور. يتحدّث تلقائياً — لا تعتبره منشوراً حتى يظهر «منشور ✓».</Notice>}
       {post.status === 'FAILED' && <Notice tone="bad"><b>فشل:</b> {post.failReason}</Notice>}

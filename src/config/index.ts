@@ -18,6 +18,8 @@ const schema = z.object({
   OWNER_PASSWORD: z.string().default(''),
   WEB_DIR: z.string().default('web/out'),
   RUN_WORKER: bool('true'),
+  // وضع تجريبي: خادم TikTok وهمي داخل الخدمة. لا يُنشر شيء على TikTok الحقيقية أبداً. للتجربة قبل اعتماد تطبيقك
+  DEMO_TIKTOK: bool('false'),
   MCP_ENABLE_APPROVAL: bool('false'),
   TIKTOK_CLIENT_KEY: z.string().default(''),
   TIKTOK_CLIENT_SECRET: z.string().default(''),

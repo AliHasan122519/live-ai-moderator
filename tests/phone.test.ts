@@ -157,3 +157,29 @@ describe('السلسلة كاملة داخل Claude فقط (MCP بعيد): تص�
     await cl.close(); await app.close();
   }, 120_000);
 });
+
+describe('الوضع التجريبي المدمج', () => {
+  it('صفحة تفويض وهمية آمنة، وعلم demo ظاهر في الـAPI وفي أدوات MCP، وتغيب خارج الوضع التجريبي', async () => {
+    const ru = 'https://app.example.com/auth/tiktok/callback';
+    const off = await boot({ TIKTOK_REDIRECT_URI: ru });
+    expect((await fetch(`${off.base}/demo/tiktok/authorize/?redirect_uri=${encodeURIComponent(ru)}&state=s`, { redirect: 'manual' })).status).toBe(404);
+    await off.app.close();
+
+    const { app, base } = await boot({ DEMO_TIKTOK: 'true', TIKTOK_REDIRECT_URI: ru });
+    const ok = await fetch(`${base}/demo/tiktok/authorize/?redirect_uri=${encodeURIComponent(ru)}&state=abc`, { redirect: 'manual' });
+    expect(ok.status).toBe(302); expect(ok.headers.get('location')).toBe(`${ru}?code=good-code&state=abc`);
+    const evil = await fetch(`${base}/demo/tiktok/authorize/?redirect_uri=${encodeURIComponent('https://evil.example/cb')}&state=abc`, { redirect: 'manual' });
+    expect(evil.status).toBe(400); // لا open redirect
+
+    const { token } = await createApiToken(r.db, 'd', ['read', 'media:write', 'post:write', 'post:publish']);
+    const acc = await (await fetch(`${base}/api/account`, { headers: { authorization: `Bearer ${token}` } })).json() as { demo: boolean };
+    expect(acc.demo).toBe(true);
+    await r.connect({ audited: true });
+    const cl = await connect(`${base}/mcp/${token}`);
+    const info = JSON.parse(((await cl.callTool({ name: 'get_tiktok_account_info', arguments: {} })) as any).content[0].text);
+    expect(info).toMatchObject({ connected: true, demo_mode: true }); expect(info.demo_note).toContain('لا تقل');
+    const prep = JSON.parse(((await cl.callTool({ name: 'publish_tiktok_video', arguments: { media_id: await r.seedMedia('VIDEO') } })) as any).content[0].text);
+    expect(prep.demo_mode).toBe(true);
+    await cl.close(); await app.close();
+  });
+});
