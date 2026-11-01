@@ -67,7 +67,7 @@ describe('خادم MCP', () => {
     const prep = await m.call('publish_tiktok_video', { media_id: up.data.media_id, caption: 'فيديو عن التقنية', hashtags: ['تقنية'], ai_generated: true });
     expect(prep.isError).toBe(false);
     expect(prep.data).toMatchObject({ published: false, status: 'AWAITING_APPROVAL' });
-    expect(prep.data.approval_url).toContain('https://app.example.com/posts/'); expect(prep.data.preview.aiGenerated).toBe(true);
+    expect(prep.data.approval_url).toContain('https://app.example.com/post?id='); expect(prep.data.preview.aiGenerated).toBe(true);
     expect(prep.data.next).toContain('approval_url');
     expect(r.fake.hits('/v2/post/publish/video/init/')).toHaveLength(0);
     const st = await m.call('get_tiktok_publish_status', { post_id: prep.data.post_id, refresh: false });

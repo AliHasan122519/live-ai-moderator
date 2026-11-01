@@ -81,7 +81,7 @@ describe('تدفق كامل عبر الـAPI', () => {
 
     const prep = await app.inject({ method: 'POST', url: '/api/posts/prepare', headers: B, payload: { mediaIds: [media.id], caption: 'فيديو عن التقنية', hashtags: ['تقنية'], privacyLevel: 'PUBLIC_TO_EVERYONE', scheduleText: 'بعد ثلاث ساعات' } });
     expect(prep.statusCode).toBe(201); const { preview, approvalUrl } = json(prep);
-    expect(preview.status).toBe('AWAITING_APPROVAL'); expect(preview.aiGenerated).toBe(true); expect(approvalUrl).toBe(`https://app.example.com/posts/${preview.id}`);
+    expect(preview.status).toBe('AWAITING_APPROVAL'); expect(preview.aiGenerated).toBe(true); expect(approvalUrl).toBe(`https://app.example.com/post?id=${preview.id}`);
     expect(preview.scheduledAt).toBeTruthy();
 
     // رمز MCP لا يستطيع الموافقة ⇒ لا نشر

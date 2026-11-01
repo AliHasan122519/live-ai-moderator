@@ -1,13 +1,18 @@
+import { createReadStream, existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { resolve, sep } from 'node:path';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import rateLimit from '@fastify/rate-limit';
 import { z, ZodError } from 'zod';
 import type { MediaAsset, PostStatus } from '@prisma/client';
 import { authenticateToken, createApiToken, type Principal } from '../auth/tokens.js';
 import { ALL_SCOPES, SCOPES, type Scope } from '../auth/scopes.js';
-import { signPayload, verifyPassword, verifyPayload } from '../crypto/index.js';
+import { hashPassword, signPayload, verifyPassword, verifyPayload } from '../crypto/index.js';
 import type { Container } from '../container.js';
 import { audit } from '../db/index.js';
 import { parseArabicTime } from '../ai/time.js';
@@ -18,6 +23,8 @@ import { resolvePull } from '../media/pull.js';
 import { PostError } from '../posts/errors.js';
 import { AccountError, AccountService } from '../tiktok/accounts.js';
 import { ERROR_AR, TikTokApiError } from '../tiktok/errors.js';
+import { ApiClient } from '../mcp/api.js';
+import { buildMcpServer } from '../mcp/server.js';
 
 declare module 'fastify' { interface FastifyRequest { principal?: Principal } }
 
@@ -40,8 +47,15 @@ const patchSchema = draftSchema.omit({ accountId: true, mediaIds: true, allowDup
 export async function buildApi(c: Container, now: () => Date = () => new Date()) {
   const { cfg, db } = c;
   // maxParamLength: روابط السحب الموقّعة (~150 حرفاً) أطول من الافتراضي 100 فتُرفض بـ414
-  const app = Fastify({ logger: cfg.isProd, bodyLimit: 1024 * 1024, trustProxy: true, routerOptions: { maxParamLength: 500 } });
-  await app.register(helmet);
+  // disableRequestLogging: روابط /mcp/<token> تحمل سراً ولا يجوز أن تُسجَّل
+  const app = Fastify({ logger: cfg.isProd, disableRequestLogging: true, bodyLimit: 1024 * 1024, trustProxy: true, routerOptions: { maxParamLength: 500 } });
+  // صفحات Next المُصدَّرة تحتوي سكربتات مضمَّنة، لذا 'unsafe-inline' للسكربت (بلا nonce). باقي القيود صارمة.
+  await app.register(helmet, { contentSecurityPolicy: { directives: {
+    defaultSrc: ["'self'"], scriptSrc: ["'self'", "'unsafe-inline'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+    mediaSrc: ["'self'", 'blob:'], connectSrc: ["'self'"], frameAncestors: ["'none'"], baseUri: ["'self'"], formAction: ["'self'"], objectSrc: ["'none'"],
+  } } });
+  const ownerHash = cfg.OWNER_PASSWORD_HASH || (cfg.OWNER_PASSWORD ? await hashPassword(cfg.OWNER_PASSWORD) : '');
+  app.addHook('onSend', async (req, reply) => { if (req.url.startsWith('/api/') || req.url.startsWith('/mcp')) reply.header('cache-control', 'no-store'); });
   await app.register(cookie);
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
   await app.register(multipart, { limits: { fileSize: 4 * 1024 ** 3, files: 1, fields: 5 } });
@@ -85,10 +99,28 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
 
   app.get('/health', async () => ({ ok: true }));
 
+  // ---------- MCP البعيد (Streamable HTTP، بلا حالة) ----------
+  // الرمز في الترويسة Authorization، أو في المسار /mcp/<token> للتطبيقات التي لا تتيح ترويسات (مثل موصّلات مخصصة).
+  // الرمز في الرابط أضعف (قد يظهر في سجلات وسطاء)؛ استخدم رمزاً بلا post:approve وأبطله عند الشك.
+  const mcpHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+    const raw = (req.params as { token?: string }).token ?? /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
+    const p = raw ? await authenticateToken(db, raw) : null;
+    if (!p) return reply.code(401).send({ error: 'unauthorized', message: 'غير مصرّح' });
+    const server = buildMcpServer(new ApiClient(`http://127.0.0.1:${req.socket.localPort}`, raw), { allowedDir: '', enableApproval: cfg.MCP_ENABLE_APPROVAL, remote: true });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    reply.hijack();
+    reply.raw.on('close', () => { void transport.close(); void server.close(); });
+    await server.connect(transport);
+    await transport.handleRequest(req.raw, reply.raw, req.body);
+  };
+  const mcpRate = { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } };
+  app.all('/mcp', mcpRate, mcpHandler);
+  app.all('/mcp/:token', mcpRate, mcpHandler);
+
   app.post('/api/auth/login', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (req, reply) => {
     const { password } = z.object({ password: z.string().min(1).max(200) }).parse(req.body);
-    if (!cfg.OWNER_PASSWORD_HASH) return reply.code(503).send({ error: 'no_password', message: 'لم تُضبط كلمة مرور المالك (OWNER_PASSWORD_HASH)' });
-    if (!(await verifyPassword(password, cfg.OWNER_PASSWORD_HASH))) { await audit(db, 'anonymous', 'login.failed', undefined, { ip: req.ip }); return reply.code(401).send({ error: 'bad_credentials', message: 'كلمة المرور غير صحيحة' }); }
+    if (!ownerHash) return reply.code(503).send({ error: 'no_password', message: 'لم تُضبط كلمة مرور المالك (OWNER_PASSWORD_HASH)' });
+    if (!(await verifyPassword(password, ownerHash))) { await audit(db, 'anonymous', 'login.failed', undefined, { ip: req.ip }); return reply.code(401).send({ error: 'bad_credentials', message: 'كلمة المرور غير صحيحة' }); }
     reply.setCookie('sid', signPayload({ o: 1 }, cfg.SESSION_SECRET, SESSION_TTL, now().getTime()), { httpOnly: true, sameSite: 'lax', secure: cfg.isProd, path: '/', maxAge: SESSION_TTL });
     await audit(db, 'owner', 'login.ok');
     return { ok: true };
@@ -192,7 +224,7 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
     if (a.scheduleText) { const r = parseArabicTime(a.scheduleText, now()); if (!r.ok) throw new PostError('bad_schedule', r.hint); return r.at; }
     return a.scheduledAt ? new Date(a.scheduledAt) : a.scheduledAt === null ? null : undefined;
   }
-  const approvalUrl = (id: string) => `${cfg.PUBLIC_WEB_URL}/posts/${id}`;
+  const approvalUrl = (id: string) => `${cfg.PUBLIC_WEB_URL}/post?id=${id}`;
 
   app.post('/api/posts', async (req, reply) => {
     const p = await need(req, reply, 'post:write'); if (!p) return;
@@ -325,6 +357,29 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
   app.get('/api/errors', async (req, reply) => {
     if (!(await need(req, reply, 'read'))) return;
     return db.post.findMany({ where: { status: { in: ['FAILED', 'UNKNOWN'] } }, orderBy: { updatedAt: 'desc' }, take: 50, select: { id: true, status: true, failReason: true, updatedAt: true, type: true, caption: true } });
+  });
+
+  // ---------- الواجهة المُصدَّرة (ملفات ثابتة) ----------
+  const webRoot = resolve(cfg.WEB_DIR);
+  const hasWeb = existsSync(resolve(webRoot, 'index.html'));
+  if (hasWeb) {
+    // /account ⇒ account.html (التصدير ينشئ مجلداً بالاسم نفسه فيحجب @fastify/static الملف). مسار آمن: داخل الجذر فقط.
+    app.addHook('onRequest', async (req, reply) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return;
+      const path = req.url.split('?')[0] ?? '/';
+      if (path === '/' || /\.[a-z0-9]+$/i.test(path) || ['/api/', '/auth/', '/media/pull/', '/mcp'].some((x) => path.startsWith(x))) return;
+      let decoded: string; try { decoded = decodeURIComponent(path); } catch { return; }
+      if (decoded.includes('\0') || decoded.includes('..')) return;
+      const file = resolve(webRoot, '.' + decoded.replace(/\/$/, '') + '.html');
+      if (!file.startsWith(webRoot + sep) || !existsSync(file)) return;
+      return reply.type('text/html; charset=utf-8').send(createReadStream(file));
+    });
+  }
+  if (hasWeb) await app.register(fastifyStatic, { root: webRoot, extensions: ['html'], index: ['index.html'], wildcard: true, decorateReply: false });
+  app.setNotFoundHandler(async (req, reply) => {
+    const apiLike = ['/api/', '/auth/', '/media/pull/', '/mcp'].some((p) => req.url.startsWith(p));
+    if (hasWeb && req.method === 'GET' && !apiLike) return reply.code(404).type('text/html').send(await readFile(resolve(webRoot, '404.html')).catch(() => 'غير موجود'));
+    return reply.code(404).send({ error: 'not_found', message: 'غير موجود' });
   });
 
   return app;

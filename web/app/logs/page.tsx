@@ -11,7 +11,7 @@ export default function Logs() {
       <PageTitle sub="كل ما فشل أو تعذّر تأكيده، وسجل العمليات الحساسة">سجل الأخطاء والعمليات</PageTitle>
       <Card className="space-y-2"><h2 className="font-semibold">منشورات تحتاج انتباهك</h2>
         {errs.data?.length ? errs.data.map((p) => (
-          <Link key={p.id} href={`/posts/${p.id}`} className="block rounded-xl border border-line bg-surface-2 p-3 text-sm"><div className="flex items-center justify-between gap-2"><span className="truncate">{p.caption || '(بلا وصف)'}</span><StatusBadge status={p.status} /></div><div className="mt-1 break-words text-xs text-bad">{p.failReason}</div><div className="mt-1 text-xs text-muted">{fmtDate(p.updatedAt)}</div></Link>
+          <Link key={p.id} href={`/post?id=${p.id}`} className="block rounded-xl border border-line bg-surface-2 p-3 text-sm"><div className="flex items-center justify-between gap-2"><span className="truncate">{p.caption || '(بلا وصف)'}</span><StatusBadge status={p.status} /></div><div className="mt-1 break-words text-xs text-bad">{p.failReason}</div><div className="mt-1 text-xs text-muted">{fmtDate(p.updatedAt)}</div></Link>
         )) : <p className="text-sm text-muted">لا شيء. كل شيء سليم ✓</p>}
       </Card>
       <Card className="space-y-1"><h2 className="font-semibold">سجل العمليات</h2>

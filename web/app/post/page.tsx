@@ -1,5 +1,6 @@
 'use client';
-import { use, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api, fmtDate, PRIVACY_AR, TYPE_AR, useApi } from '@/lib/api';
 import { Badge, Button, Card, Field, inputCls, Notice, PageTitle, Spinner, StatusBadge } from '@/components/ui';
 import { MediaThumb } from '@/components/MediaThumb';
@@ -7,9 +8,9 @@ import { MediaThumb } from '@/components/MediaThumb';
 const ACTIVE = ['QUEUED', 'SENDING', 'PROCESSING'];
 const EVENT_AR: Record<string, string> = { created: 'أُنشئ', updated: 'عُدّل', approval_requested: 'طُلبت الموافقة', approved: 'وُوفق عليه', approval_invalidated: 'أُبطلت الموافقة بعد تعديل', scheduled: 'جُدول', queued: 'دخل الطابور', sending: 'بدأ الإرسال', init_ok: 'قبلته TikTok للمعالجة', upload_done: 'اكتمل رفع الملف', published: 'أكّدت TikTok نشره', inbox_delivered: 'سُلّم لصندوق TikTok', failed: 'فشل', unknown: 'حالة غير مؤكدة', canceled: 'أُلغي', retry: 'إعادة محاولة يدوية', rate_limited_requeued: 'حد الطلبات: أُعيد لاحقاً', status_check_error: 'تعذّر الاستعلام عن الحالة' };
 
-export default function PostPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
-  const { data, loading, reload } = useApi<any>(`/api/posts/${id}`, { poll: 6000 });
+function PostInner() {
+  const id = useSearchParams().get('id') ?? '';
+  const { data, loading, reload } = useApi<any>(id ? `/api/posts/${id}` : null, { poll: 6000 });
   const [msg, setMsg] = useState<{ t: 'ok' | 'bad' | 'info'; s: string } | null>(null);
   const [ack, setAck] = useState(false); const [busy, setBusy] = useState(false);
   const [edit, setEdit] = useState(false); const [cap, setCap] = useState(''); const [tags, setTags] = useState(''); const [when, setWhen] = useState('');
@@ -97,3 +98,5 @@ export default function PostPage({ params }: { params: Promise<{ id: string }> }
     </div>
   );
 }
+
+export default function PostPage() { return <Suspense fallback={<Spinner />}><PostInner /></Suspense>; }

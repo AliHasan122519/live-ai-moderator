@@ -49,7 +49,7 @@ export default function NewPost() {
       if (mode === 'DIRECT') body.privacyLevel = privacy;
       if (when.trim()) body.scheduleText = when;
       const r = await api('/api/posts/prepare', { body });
-      router.push(`/posts/${r.preview.id}`);
+      router.push(`/post?id=${r.preview.id}`);
     } catch (e: any) { setErr({ m: e.message, d: e.details }); setBusy(''); }
   }
   if (media.loading || acc.loading) return <Spinner />;

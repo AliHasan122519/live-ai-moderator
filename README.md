@@ -4,18 +4,20 @@
 
 > ⚠️ **حالة الصدق:** كل التكامل مع TikTok مُختبَر **مقابل خادم TikTok وهمي** (لم تصل جلسة البناء إلى خوادم TikTok). لن يُعرض أي منشور كـ«منشور» إلا بعد `PUBLISH_COMPLETE` من TikTok، لكن لم يُجرَّب ذلك مع TikTok الحقيقية بعد. اقرأ `docs/PLAN.md` ثم `docs/TIKTOK_SETUP.md`.
 
+> 📱 **تستخدم الجوال فقط؟** اقرأ `docs/PHONE.md`: خدمة واحدة تُنشر بنقرات من المتصفح، وتُضاف إلى Claude كموصّل مخصص (MCP بعيد).
+
 ## المعمارية
 ```
- جوال/متصفح ──► Next.js (web/) ──/api──► Fastify API ──► Postgres (Prisma)
- Claude Code ──► MCP (stdio) ──HTTP+Bearer──►   │  ├──► Storage (S3/محلي)
-                                                │  └──► Redis/BullMQ ──► Worker ──► TikTok Content Posting API
+ جوال/متصفح ──► Fastify (يخدم الواجهة الثابتة + API + العامل في عملية واحدة) ──► Postgres (Prisma)
+ Claude (موصّل مخصص) ──► /mcp (HTTP) ──►        │  ├──► Storage (S3/محلي)
+ Claude Code ──► MCP (stdio) ──────────►         │  └──► Redis/BullMQ ──► TikTok Content Posting API
 ```
 - `src/tiktok/` عميل OAuth + Content Posting (رسمي فقط، بلا أتمتة متصفح).
 - `src/posts/` آلة الحالات، بوابة الموافقة، المنفّذ، المتابع، الجدولة.
 - `src/media/` فحص الملفات، روابط السحب الموقّعة، الاحتفاظ.
 - `src/ai/` توليد الأوصاف/الهاشتاقات (Claude) وفهم المواعيد العربية (Asia/Riyadh).
 - `src/mcp/` 13 أداة + `upload_media` + `approve_tiktok_post` (اختيارية).
-- `web/` لوحة جوال أولاً RTL Dark (12 صفحة).
+- `web/` لوحة جوال أولاً RTL Dark (12 صفحة) تُصدَّر ملفات ثابتة وتُخدَّم من الـAPI نفسه.
 
 ## تشغيل محلي للتجربة (بلا TikTok حقيقي)
 ```bash
@@ -32,7 +34,7 @@ npm run start:api & npm run start:worker &
 
 ## الاختبارات
 ```bash
-npm test          # 67 اختباراً: يتطلب Postgres وRedis (TEST_DATABASE_URL / TEST_REDIS_URL) وffmpeg
+npm test          # 73 اختباراً: يتطلب Postgres وRedis (TEST_DATABASE_URL / TEST_REDIS_URL) وffmpeg
 npm run typecheck && (cd web && npm run typecheck)
 ```
 ## الأوامر

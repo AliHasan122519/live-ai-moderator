@@ -1,0 +1,43 @@
+# ملف نشر جاهز لمنصة Render (Blueprint). كتبتُه من معرفتي بصيغته ولم أجرّبه؛ راجع docs/PHONE.md.
+# قاعدة البيانات وRedis والقرص مدفوعة عادةً؛ تحقق من الأسعار الحالية قبل التأكيد.
+services:
+  - type: web
+    name: tiktok-publisher
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    disk:
+      name: media
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: tiktok-db, property: connectionString }
+      - key: REDIS_URL
+        fromService: { type: keyvalue, name: tiktok-redis, property: connectionString }
+      - key: STORAGE_DRIVER
+        value: local
+      - key: STORAGE_LOCAL_DIR
+        value: /data/media
+      - key: TOKEN_ENC_KEY
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      # تُدخلها أنت من لوحة المنصة (لا تُحفظ في المستودع):
+      - key: OWNER_PASSWORD
+        sync: false
+      - key: TIKTOK_CLIENT_KEY
+        sync: false
+      - key: TIKTOK_CLIENT_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TIKTOK_SCOPES
+        value: user.info.basic,video.upload,video.publish
+  - type: keyvalue
+    name: tiktok-redis
+    plan: starter
+    ipAllowList: []
+databases:
+  - name: tiktok-db
+    plan: basic-256mb

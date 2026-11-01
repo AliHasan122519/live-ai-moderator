@@ -29,6 +29,7 @@
     "@fastify/helmet": "^13.2.0",
     "@fastify/multipart": "^10.1.6",
     "@fastify/rate-limit": "^11.2.1",
+    "@fastify/static": "^10.1.8",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@prisma/client": "^6.19.3",
     "bullmq": "^6.5.3",
