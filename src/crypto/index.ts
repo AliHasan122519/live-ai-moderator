@@ -47,7 +47,9 @@ export function signPayload(payload: Record<string, unknown>, secret: string, tt
 }
 
 export function verifyPayload<T = Record<string, unknown>>(token: string, secret: string, now = Date.now()): (T & { exp: number }) | null {
-  const [body, sig] = token.split('.');
+  const parts = token.split('.');
+  if (parts.length !== 2) return null; // لا نقبل مقاطع زائدة
+  const [body, sig] = parts as [string, string];
   if (!body || !sig) return null;
   const exp = createHmac('sha256', secret).update(body).digest();
   const given = Buffer.from(sig, 'base64url');

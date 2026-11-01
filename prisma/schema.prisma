@@ -124,6 +124,9 @@ model Post {
   coverIndex       Int           @default(0)
   // بصمة المحتوى (وسائط+وصف+خصوصية+إعدادات+حساب). الموافقة مرتبطة بها؛ أي تعديل يُبطلها.
   contentHash      String
+  // توقيع تسلسل بصمات الوسائط: لمنع نشر الملف نفسه مرتين على الحساب
+  mediaSig         String        @default("")
+  allowDuplicate   Boolean       @default(false)
   approvedHash     String?
   approvedAt       DateTime?
   approvedBy       String?
@@ -141,6 +144,7 @@ model Post {
 
   @@index([status, scheduledAt])
   @@index([accountId, createdAt])
+  @@index([accountId, mediaSig])
 }
 
 model PostMedia {

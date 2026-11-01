@@ -16,6 +16,7 @@ export class FakeTikTok {
   grantedScope = 'user.info.basic,video.upload,video.publish';
   pollsUntilDone = 2; finalStatus: 'PUBLISH_COMPLETE' | 'FAILED' | 'SEND_TO_USER_INBOX' = 'PUBLISH_COMPLETE';
   injected: Array<{ path: string; status: number; body: Json; once: boolean }> = [];
+  uploadFailures = 0;
   issued = 0; refreshCalls = 0; revoked: string[] = [];
 
   injectError(path: string, status: number, body: Json, once = true) { this.injected.push({ path, status, body, once }); }
@@ -138,6 +139,7 @@ export class FakeTikTok {
     f.server.removeAllListeners('request');
     f.server.on('request', async (req, res) => {
       if (req.method === 'PUT' && req.url?.startsWith('/upload/')) {
+        if (f.uploadFailures > 0) { f.uploadFailures--; for await (const _ of req) { /* drain */ } f.requests.push({ method: 'PUT', path: '/upload', body: 'injected 500' }); res.writeHead(500); return void res.end(); }
         const id = req.url.slice('/upload/'.length); const pub = f.pubs.get(id);
         const chunks: Buffer[] = []; for await (const c of req) chunks.push(c as Buffer);
         const len = Buffer.concat(chunks).length;
