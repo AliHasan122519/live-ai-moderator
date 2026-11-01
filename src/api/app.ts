@@ -27,6 +27,8 @@ import { resolvePull } from '../media/pull.js';
 import { PostError } from '../posts/errors.js';
 import { AccountError, AccountService } from '../tiktok/accounts.js';
 import { ERROR_AR, TikTokApiError } from '../tiktok/errors.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { ApiClient } from '../mcp/api.js';
 import { buildMcpServer } from '../mcp/server.js';
 
@@ -406,6 +408,42 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
   });
 
   // ---------- الإدارة ----------
+  /** فحص جاهزية للمالك: يبيّن بالضبط ما الناقص قبل أول نشر حقيقي. لا يعرض أسراراً. */
+  app.get('/api/readiness', async (req, reply) => {
+    if (!(await ownerOnly(req, reply))) return;
+    type Check = { id: string; label: string; status: 'ok' | 'warn' | 'bad'; detail: string };
+    const out: Check[] = []; const add = (id: string, label: string, status: Check['status'], detail: string) => out.push({ id, label, status, detail });
+    const tryIt = async (fn: () => Promise<void>) => { try { await fn(); return null; } catch (e) { return (e as Error).message.split('\n')[0] ?? 'خطأ'; } };
+    const run = promisify(execFile);
+
+    if (cfg.DEMO_TIKTOK) add('demo', 'الوضع', 'warn', 'وضع تجريبي (DEMO_TIKTOK=true): لن يُنشر شيء على TikTok الحقيقية. احذف المتغير للنشر الحقيقي');
+    else add('demo', 'الوضع', 'ok', 'حقيقي: النشر عبر واجهة TikTok الرسمية');
+    let e = await tryIt(async () => { await db.$queryRaw`SELECT 1`; }); add('db', 'قاعدة البيانات', e ? 'bad' : 'ok', e ?? 'متصلة');
+    add('redis', 'Redis (الطابور والجدولة)', (await c.queue.ping()) ? 'ok' : 'bad', (await c.queue.ping()) ? 'متصل' : 'غير متصل: لن تعمل الجدولة ولا المتابعة');
+    e = await tryIt(async () => { const k = `healthcheck/${Date.now()}.txt`; await c.storage.put(k, Buffer.from('ok'), 'text/plain'); if (!(await c.storage.stat(k))) throw new Error('لم يُقرأ بعد الكتابة'); await c.storage.delete(k); });
+    add('storage', 'تخزين الملفات', e ? 'bad' : 'ok', e ?? `يعمل (${cfg.STORAGE_DRIVER}). تذكّر: القرص المحلي يحتاج قرصاً دائماً على الاستضافة وإلا تضيع الملفات عند إعادة النشر`);
+    e = await tryIt(async () => { await run('ffmpeg', ['-version']); await run('ffprobe', ['-version']); }); add('ffmpeg', 'ffmpeg (فحص الفيديو والمعاينة)', e ? 'bad' : 'ok', e ?? 'متاح');
+    e = await tryIt(async () => { await renderHtmlToJpeg('<p style="font-family:sans-serif">اختبار</p>', { width: 320, height: 320 }); });
+    add('chromium', 'رسم التصاميم (Chromium)', e ? 'warn' : 'ok', e ?? 'يعمل. تأكد أن الخط العربي يظهر سليماً في صورة تجريبية');
+    add('https', 'عنوان الخدمة', cfg.PUBLIC_API_URL.startsWith('https://') ? 'ok' : cfg.isProd ? 'bad' : 'warn', `${cfg.PUBLIC_API_URL}${cfg.PUBLIC_API_URL.startsWith('https://') ? '' : ' — TikTok تتطلب HTTPS لـRedirect URI في الإنتاج'}`);
+    const keysSet = !!cfg.TIKTOK_CLIENT_KEY && !!cfg.TIKTOK_CLIENT_SECRET && cfg.TIKTOK_CLIENT_KEY !== 'ck_test';
+    add('keys', 'مفاتيح TikTok', cfg.DEMO_TIKTOK ? 'warn' : keysSet ? 'ok' : 'bad', cfg.DEMO_TIKTOK ? 'غير مستخدمة في الوضع التجريبي' : keysSet ? 'مضبوطة (Client key موجود)' : 'ناقصة: أضف TIKTOK_CLIENT_KEY وTIKTOK_CLIENT_SECRET');
+    add('redirect', 'Redirect URI', cfg.TIKTOK_REDIRECT_URI.startsWith('https://') || !cfg.isProd ? 'ok' : 'bad', `${cfg.TIKTOK_REDIRECT_URI} — يجب أن يطابق حرفياً ما سجّلته في TikTok for Developers`);
+    add('scopes', 'الصلاحيات المطلوبة', cfg.scopes.includes('video.publish') ? 'ok' : 'warn', cfg.scopes.includes('video.publish') ? cfg.scopes.join(', ') : `${cfg.scopes.join(', ')} — بدون video.publish يُرسل كمسودة فقط`);
+    const acc = await db.tikTokAccount.findFirst({ orderBy: { connectedAt: 'desc' } });
+    if (!acc) add('account', 'حساب TikTok', 'bad', 'غير مربوط: صفحة «الحساب» ← ربط');
+    else {
+      add('account', 'حساب TikTok', acc.status === 'ACTIVE' ? 'ok' : 'bad', acc.status === 'ACTIVE' ? `${acc.displayName} (${acc.scopes.join(', ')})` : `الحالة ${acc.status}: أعد الربط`);
+      add('creator', 'إعدادات النشر من TikTok', acc.creatorInfo ? 'ok' : 'warn', acc.creatorInfo ? 'مُجلبة' : 'لم تُجلب بعد: زر «تحديث إعدادات النشر»');
+      add('audited', 'اعتماد التطبيق (Audit)', acc.audited ? 'ok' : 'warn', acc.audited ? 'معتمد: النشر العام متاح' : 'غير معتمد: كل نشر مباشر سيكون «أنا فقط»، وهذا طبيعي قبل مراجعة TikTok');
+    }
+    add('ai', 'الذكاء الاصطناعي للأوصاف', c.ai.available ? 'ok' : 'warn', c.ai.available ? 'مفعّل' : 'غير مفعّل (اختياري): أضف ANTHROPIC_API_KEY. Claude نفسه يكتب الأوصاف بدونه');
+    const chat = (await db.setting.findUnique({ where: { key: 'chatApproval' } }))?.value === true;
+    add('chat', '«انشر» من داخل Claude', chat ? 'ok' : 'warn', chat ? 'مفعّل' : 'مغلق: الموافقة بزر من اللوحة (فعّله من الأمان)');
+    const tokens = await db.apiToken.count({ where: { revokedAt: null } });
+    add('mcp', 'رمز الموصّل (MCP)', tokens ? 'ok' : 'warn', tokens ? `${tokens} رمز فعّال` : 'لا رمز: أنشئ واحداً من «الأمان» لتضيفه في Claude');
+    return { ready: !out.some((x) => x.status === 'bad'), checks: out };
+  });
   app.get('/api/dashboard', async (req, reply) => {
     if (!(await need(req, reply, 'read'))) return;
     const by = await db.post.groupBy({ by: ['status'], _count: true });

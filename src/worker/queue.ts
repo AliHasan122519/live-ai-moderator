@@ -24,6 +24,7 @@ export class BullPublishQueue implements PublishQueue {
     const j = await this.q.getJob(`publish_${postId}`);
     try { await j?.remove(); } catch { /* نشطة الآن: CAS على الحالة يمنع التنفيذ المزدوج */ }
   }
+  async ping() { try { await this.q.getJobCounts(); return true; } catch { return false; } }
   async close() { await this.q.close(); }
 }
 

@@ -26,6 +26,8 @@ describe('BullMQ على Redis حقيقي', () => {
   });
   afterAll(async () => { await worker.close(); await bq.close(); });
 
+  it('ping يعكس حالة Redis الحقيقية', async () => { expect(await bq.ping()).toBe(true); });
+
   it('نشر فوري عبر الطابور ثم متابعة الحالة تلقائياً حتى PUBLISHED', async () => {
     await r.connect({ audited: true }); r.fake.pollsUntilDone = 0;
     const m = await r.seedMedia('VIDEO');

@@ -4,6 +4,18 @@ import { useSearchParams } from 'next/navigation';
 import { api, fmtDate, PRIVACY_AR, useApi } from '@/lib/api';
 import { Badge, Button, Card, Notice, PageTitle, Spinner } from '@/components/ui';
 
+function Readiness() {
+  const [list, setList] = useState<any[] | null>(null); const [busy, setBusy] = useState(false); const [err, setErr] = useState('');
+  async function run() { setBusy(true); setErr(''); try { setList((await api('/api/readiness')).checks); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); } }
+  const icon = { ok: '✓', warn: '!', bad: '✗' } as const; const cls = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad' } as const;
+  return (
+    <Card className="space-y-3"><div className="flex items-center justify-between gap-3"><h2 className="font-semibold">فحص الجاهزية</h2><Button disabled={busy} onClick={run}>{busy ? 'جارٍ الفحص…' : 'افحص الآن'}</Button></div>
+      {err && <Notice tone="bad">{err}</Notice>}
+      {list && <ul className="divide-y divide-line/60 text-sm">{list.map((c) => <li key={c.id} className="flex gap-3 py-2"><span className={`w-4 shrink-0 font-bold ${cls[c.status as 'ok']}`}>{icon[c.status as 'ok']}</span><span><b>{c.label}</b><span className="block text-xs text-muted">{c.detail}</span></span></li>)}</ul>}
+    </Card>
+  );
+}
+
 function Inner() {
   const q = useSearchParams(); const { data, loading, reload } = useApi<any>('/api/account');
   const [msg, setMsg] = useState(''); const [busy, setBusy] = useState(false);
@@ -12,6 +24,7 @@ function Inner() {
   const a = data?.account; const info = a?.creatorInfo;
   return (
     <div className="space-y-4">
+      <Readiness />
       <PageTitle sub="الربط عبر OAuth الرسمي من TikTok. لا نخزّن كلمة مرور TikTok أبداً">الحساب والتكامل</PageTitle>
       {q.get('connected') && <Notice tone="ok">تم ربط الحساب بنجاح ✓</Notice>}
       {q.get('error') && <Notice tone="bad">{q.get('error')}</Notice>}

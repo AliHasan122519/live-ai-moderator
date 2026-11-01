@@ -183,3 +183,23 @@ describe('الوضع التجريبي المدمج', () => {
     await cl.close(); await app.close();
   });
 });
+
+describe('فحص الجاهزية', () => {
+  it('يفحص فعلياً ويصنّف: تجريبي ⇒ تحذير، حساب غير مربوط ⇒ فشل، مالك فقط، ولا يسرّب أسراراً', async () => {
+    const { app, base } = await boot({ DEMO_TIKTOK: 'true', OWNER_PASSWORD: 'كلمة-مرور-طويلة-123' });
+    const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'كلمة-مرور-طويلة-123' }) });
+    const sid = /sid=([^;]+)/.exec(login.headers.get('set-cookie')!)![1]!;
+    const { token } = await createApiToken(r.db, 'x', ['read']);
+    expect((await fetch(base + '/api/readiness', { headers: { authorization: `Bearer ${token}` } })).status).toBe(403);
+    const res = await (await fetch(base + '/api/readiness', { headers: { cookie: `sid=${sid}` } })).json() as { ready: boolean; checks: Array<{ id: string; status: string; detail: string }> };
+    const by = Object.fromEntries(res.checks.map((c) => [c.id, c]));
+    expect(by.db!.status).toBe('ok'); expect(by.redis!.status).toBe('ok'); expect(by.storage!.status).toBe('ok'); expect(by.ffmpeg!.status).toBe('ok'); expect(by.chromium!.status).toBe('ok');
+    expect(by.demo!.status).toBe('warn'); expect(by.account!.status).toBe('bad'); expect(res.ready).toBe(false);
+    expect(JSON.stringify(res)).not.toMatch(new RegExp(`${cfgSecretPattern()}|cs_test|tpk_`));
+    await r.connect({ audited: false });
+    const after = await (await fetch(base + '/api/readiness', { headers: { cookie: `sid=${sid}` } })).json() as typeof res;
+    expect(Object.fromEntries(after.checks.map((c) => [c.id, c.status])).account).toBe('ok');
+    await app.close();
+  });
+});
+const cfgSecretPattern = () => 'SESSION_SECRET_NEVER_PRESENT';

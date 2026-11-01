@@ -34,7 +34,7 @@ npm run start:api & npm run start:worker &
 
 ## الاختبارات
 ```bash
-npm test          # 83 اختباراً: يتطلب Postgres وRedis (TEST_DATABASE_URL / TEST_REDIS_URL) وffmpeg
+npm test          # 85 اختباراً: يتطلب Postgres وRedis (TEST_DATABASE_URL / TEST_REDIS_URL) وffmpeg
 npm run typecheck && (cd web && npm run typecheck)
 ```
 ## الأوامر
