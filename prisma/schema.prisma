@@ -1,0 +1,180 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MediaKind {
+  VIDEO
+  IMAGE
+}
+enum MediaSource {
+  UPLOAD
+  AI_GENERATED
+  CLAUDE_CODE
+}
+enum PostType {
+  VIDEO
+  PHOTO
+  CAROUSEL
+}
+enum PostMode {
+  DIRECT
+  DRAFT_INBOX
+}
+enum AccountStatus {
+  ACTIVE
+  NEEDS_REAUTH
+  REVOKED
+}
+
+// آلة حالات المنشور. لا حالة PUBLISHED إلا بتأكيد TikTok (PUBLISH_COMPLETE).
+enum PostStatus {
+  DRAFT              // محرّر، لم يُعرض للموافقة
+  AWAITING_APPROVAL  // جاهز للمعاينة بانتظار موافقة صريحة
+  APPROVED           // وافق المالك على هذا المحتوى بالتحديد (ببصمته)
+  SCHEDULED          // موافَق عليه ومجدول لوقت لاحق
+  QUEUED             // في الطابور للإرسال الآن
+  SENDING            // جارٍ استدعاء init/رفع الملف
+  PROCESSING         // TikTok يعالج (publish_id موجود)
+  INBOX_DELIVERED    // سُلِّم كمسودة في صندوق TikTok (ينتظر المستخدم داخل التطبيق)
+  PUBLISHED          // أكّد TikTok النشر
+  FAILED             // فشل مؤكَّد
+  UNKNOWN            // فشل غامض بعد إرسال init — يتطلب مراجعة يدوية، لا إعادة تلقائية
+  CANCELED
+}
+
+model ApiToken {
+  id         String    @id @default(cuid())
+  name       String
+  tokenHash  String    @unique
+  scopes     String[]
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+}
+
+model TikTokAccount {
+  id               String        @id @default(cuid())
+  openId           String        @unique
+  displayName      String
+  username         String?
+  avatarUrl        String?
+  scopes           String[]
+  accessTokenEnc   String
+  refreshTokenEnc  String
+  accessExpiresAt  DateTime
+  refreshExpiresAt DateTime
+  creatorInfo      Json?
+  creatorInfoAt    DateTime?
+  // هل اجتاز تطبيقك مراجعة TikTok (Audit)؟ إن لم يجتزها يُفرَض SELF_ONLY مهما اختار المستخدم.
+  audited          Boolean       @default(false)
+  status           AccountStatus @default(ACTIVE)
+  connectedAt      DateTime      @default(now())
+  posts            Post[]
+}
+
+model OAuthState {
+  state        String   @id
+  codeVerifier String
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+}
+
+model MediaAsset {
+  id          String      @id @default(cuid())
+  kind        MediaKind
+  filename    String
+  mime        String
+  sizeBytes   BigInt
+  sha256      String
+  storageKey  String      @unique
+  width       Int?
+  height      Int?
+  durationSec Float?
+  source      MediaSource @default(UPLOAD)
+  aiGenerated Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  expiresAt   DateTime?
+  deletedAt   DateTime?
+  posts       PostMedia[]
+
+  @@index([sha256])
+}
+
+model Post {
+  id               String        @id @default(cuid())
+  accountId        String
+  account          TikTokAccount @relation(fields: [accountId], references: [id])
+  type             PostType
+  mode             PostMode      @default(DIRECT)
+  status           PostStatus    @default(DRAFT)
+  caption          String        @default("")
+  hashtags         String[]
+  privacyLevel     String        @default("SELF_ONLY")
+  disableComment   Boolean       @default(false)
+  disableDuet      Boolean       @default(false)
+  disableStitch    Boolean       @default(false)
+  aiGenerated      Boolean       @default(false)
+  brandContent     Boolean       @default(false)
+  brandOrganic     Boolean       @default(false)
+  coverIndex       Int           @default(0)
+  // بصمة المحتوى (وسائط+وصف+خصوصية+إعدادات+حساب). الموافقة مرتبطة بها؛ أي تعديل يُبطلها.
+  contentHash      String
+  approvedHash     String?
+  approvedAt       DateTime?
+  approvedBy       String?
+  scheduledAt      DateTime?
+  publishId        String?       @unique
+  tiktokPostId     String?
+  failReason       String?
+  attempts         Int           @default(0)
+  initSentAt       DateTime?
+  lastCheckedAt    DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  media            PostMedia[]
+  events           PostEvent[]
+
+  @@index([status, scheduledAt])
+  @@index([accountId, createdAt])
+}
+
+model PostMedia {
+  postId   String
+  mediaId  String
+  position Int
+  post     Post       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  media    MediaAsset @relation(fields: [mediaId], references: [id])
+
+  @@id([postId, position])
+}
+
+model PostEvent {
+  id     String   @id @default(cuid())
+  postId String
+  post   Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  at     DateTime @default(now())
+  actor  String
+  event  String
+  detail Json?
+
+  @@index([postId, at])
+}
+
+model AuditLog {
+  id     String   @id @default(cuid())
+  at     DateTime @default(now())
+  actor  String
+  action String
+  target String?
+  detail Json?
+}
+
+model Setting {
+  key   String @id
+  value Json
+}
