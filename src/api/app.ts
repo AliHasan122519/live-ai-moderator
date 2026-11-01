@@ -40,7 +40,7 @@ const patchSchema = draftSchema.omit({ accountId: true, mediaIds: true, allowDup
 export async function buildApi(c: Container, now: () => Date = () => new Date()) {
   const { cfg, db } = c;
   // maxParamLength: روابط السحب الموقّعة (~150 حرفاً) أطول من الافتراضي 100 فتُرفض بـ414
-  const app = Fastify({ logger: cfg.isProd, bodyLimit: 1024 * 1024, trustProxy: true, maxParamLength: 500 });
+  const app = Fastify({ logger: cfg.isProd, bodyLimit: 1024 * 1024, trustProxy: true, routerOptions: { maxParamLength: 500 } });
   await app.register(helmet);
   await app.register(cookie);
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });

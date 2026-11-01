@@ -53,6 +53,10 @@ export class FakeTikTok {
     const inj = this.injected.findIndex((i) => i.path === path);
     if (inj >= 0) { const i = this.injected[inj]!; if (i.once) this.injected.splice(inj, 1); return send(i.status, i.body); }
 
+    if (path === '/v2/auth/authorize/') { // صفحة التفويض الوهمية: توافق تلقائياً وتعيد التوجيه كما تفعل TikTok
+      const ru = new URL(url.searchParams.get('redirect_uri')!); ru.searchParams.set('code', 'good-code'); ru.searchParams.set('state', url.searchParams.get('state') ?? '');
+      res.writeHead(302, { location: ru.toString() }); return void res.end();
+    }
     if (path === '/v2/oauth/token/') {
       if (body.client_key !== 'ck_test' || body.client_secret !== 'cs_test') return send(401, { error: 'invalid_client', error_description: 'bad client' });
       if (body.grant_type === 'authorization_code') {

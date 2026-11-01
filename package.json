@@ -17,7 +17,8 @@
     "db:generate": "prisma generate",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "cli": "tsx src/cli.ts"
+    "cli": "tsx src/cli.ts",
+    "dev:fake-tiktok": "tsx scripts/fake-tiktok.ts"
   },
   "license": "UNLICENSED",
   "dependencies": {
