@@ -6,7 +6,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     globalSetup: ['tests/global-setup.ts'],
-    env: { DATABASE_URL: testDb },
+    env: { DATABASE_URL: testDb, CHROMIUM_PATH: process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium' },
     fileParallelism: false,
     testTimeout: 20_000,
   },

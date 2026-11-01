@@ -4,7 +4,7 @@
 
 > ⚠️ **حالة الصدق:** كل التكامل مع TikTok مُختبَر **مقابل خادم TikTok وهمي** (لم تصل جلسة البناء إلى خوادم TikTok). لن يُعرض أي منشور كـ«منشور» إلا بعد `PUBLISH_COMPLETE` من TikTok، لكن لم يُجرَّب ذلك مع TikTok الحقيقية بعد. اقرأ `docs/PLAN.md` ثم `docs/TIKTOK_SETUP.md`.
 
-> 📱 **تستخدم الجوال فقط؟** اقرأ `docs/PHONE.md`: خدمة واحدة تُنشر بنقرات من المتصفح، وتُضاف إلى Claude كموصّل مخصص (MCP بعيد).
+> 📱 **تستخدم الجوال فقط؟** اقرأ `docs/PHONE.md`: بعد إعداد لمرة واحدة تصمّم داخل Claude (صور HTML وفيديو من شرائح) وتقول «انشر» فيُنشر عبر الواجهة الرسمية.
 
 ## المعمارية
 ```
@@ -34,7 +34,7 @@ npm run start:api & npm run start:worker &
 
 ## الاختبارات
 ```bash
-npm test          # 73 اختباراً: يتطلب Postgres وRedis (TEST_DATABASE_URL / TEST_REDIS_URL) وffmpeg
+npm test          # 82 اختباراً: يتطلب Postgres وRedis (TEST_DATABASE_URL / TEST_REDIS_URL) وffmpeg
 npm run typecheck && (cd web && npm run typecheck)
 ```
 ## الأوامر

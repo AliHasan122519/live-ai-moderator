@@ -6,13 +6,21 @@ import { Badge, Button, Card, Field, inputCls, Notice, PageTitle, Spinner } from
 const DEFAULTS = ['read', 'media:write', 'post:write', 'post:publish', 'ai:use'];
 export default function Security() {
   const { data, loading, reload } = useApi<any>('/api/tokens');
+  const settings = useApi<any>('/api/settings');
   const [name, setName] = useState('mcp'); const [scopes, setScopes] = useState<string[]>(DEFAULTS); const [fresh, setFresh] = useState(''); const [err, setErr] = useState('');
-  if (loading) return <Spinner />;
+  if (loading || settings.loading) return <Spinner />;
+  async function setChat(v: boolean) { try { await api('/api/settings', { method: 'PUT', body: { chatApproval: v } }); settings.reload(); } catch (e) { setErr((e as Error).message); } }
   async function create() { setErr(''); try { const r = await api('/api/tokens', { body: { name, scopes } }); setFresh(r.token); reload(); } catch (e) { setErr((e as Error).message); } }
   async function revoke(id: string) { if (confirm('إبطال هذا الرمز؟ سيتوقف فوراً.')) { await api(`/api/tokens/${id}`, { method: 'DELETE' }); reload(); } }
   return (
     <div className="space-y-4">
       <PageTitle sub="رموز لأدوات Claude Code (MCP). كل رمز بصلاحيات محددة ويمكن إبطاله">الأمان</PageTitle>
+      <Card className="space-y-3 border-warn/40">
+        <h2 className="font-semibold">الموافقة من داخل Claude</h2>
+        <label className="flex items-start gap-3 text-sm"><input type="checkbox" className="mt-0.5 h-5 w-5 accent-[#fe2c55]" checked={!!settings.data?.chatApproval} onChange={(e) => setChat(e.target.checked)} />
+          <span>اسمح لـClaude بالموافقة على النشر من المحادثة (تقول «انشر» فيُنشر). يعمل فقط مع رمز يملك <b dir="ltr">post:approve</b>.</span></label>
+        <Notice tone="warn">إن فعّلتَه فأنت تثق بأن Claude لن يوافق دون طلبك. نموذج مخدوع بنص داخل ملف أو وصف قد يوافق دون سؤالك؛ الخادم يضمن فقط أن الموافقة على المحتوى الذي جُهّز. أغلقه متى شئت.</Notice>
+      </Card>
       <Card className="space-y-3">
         <h2 className="font-semibold">رمز جديد</h2>
         <Field label="الاسم"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} maxLength={60} /></Field>

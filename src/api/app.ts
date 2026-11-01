@@ -17,7 +17,11 @@ import type { Container } from '../container.js';
 import { audit } from '../db/index.js';
 import { parseArabicTime } from '../ai/time.js';
 import { AiUnavailable } from '../ai/service.js';
+import { Readable } from 'node:stream';
 import { extractFrames } from '../media/frames.js';
+import { fetchPublicMedia, UrlError } from '../media/fetchUrl.js';
+import { renderHtmlToJpeg, RenderError } from '../media/render.js';
+import { makeSlideshow, SlideshowError, thumbnail } from '../media/slideshow.js';
 import { ingestUpload, MediaError } from '../media/ingest.js';
 import { resolvePull } from '../media/pull.js';
 import { PostError } from '../posts/errors.js';
@@ -89,6 +93,8 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
     const e = err as Error & { statusCode?: number; validation?: unknown };
     if (err instanceof ZodError) return reply.code(400).send({ error: 'validation', message: 'بيانات غير صالحة', details: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`) });
     if (err instanceof PostError) { const code = err.code === 'not_found' ? 404 : ['bad_state', 'duplicate', 'stale_hash', 'cannot_cancel', 'needs_force', 'not_approved'].includes(err.code) ? 409 : 400; return reply.code(code).send({ error: err.code, message: err.message, details: err.details }); }
+    if (err instanceof RenderError) return reply.code(err.code === 'unavailable' ? 503 : 400).send({ error: err.code, message: err.message });
+    if (err instanceof SlideshowError || err instanceof UrlError) return reply.code(400).send({ error: (err as UrlError).code ?? 'slideshow', message: err.message });
     if (err instanceof AccountError) return reply.code(409).send({ error: err.code, message: err.message });
     if (err instanceof MediaError) return reply.code(err.code === 'too_large' ? 413 : 400).send({ error: err.code, message: err.message });
     if (err instanceof TikTokApiError) return reply.code(502).send({ error: err.code, message: ERROR_AR[err.code] ?? err.message });
@@ -106,7 +112,7 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
     const raw = (req.params as { token?: string }).token ?? /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
     const p = raw ? await authenticateToken(db, raw) : null;
     if (!p) return reply.code(401).send({ error: 'unauthorized', message: 'غير مصرّح' });
-    const server = buildMcpServer(new ApiClient(`http://127.0.0.1:${req.socket.localPort}`, raw), { allowedDir: '', enableApproval: cfg.MCP_ENABLE_APPROVAL, remote: true });
+    const server = buildMcpServer(new ApiClient(`http://127.0.0.1:${req.socket.localPort}`, raw), { allowedDir: '', enableApproval: true, remote: true });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     reply.hijack();
     reply.raw.on('close', () => { void transport.close(); void server.close(); });
@@ -213,6 +219,68 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
     return reply.header('content-type', a.mime).header('content-length', Number(a.sizeBytes)).header('cache-control', 'no-store').send(await c.storage.get(a.storageKey));
   });
 
+  // ---------- إعدادات المالك ----------
+  async function getSetting<T>(key: string, d: T): Promise<T> { const r = await db.setting.findUnique({ where: { key } }); return (r?.value as T | undefined) ?? d; }
+  app.get('/api/settings', async (req, reply) => {
+    if (!(await need(req, reply, 'read'))) return;
+    return { chatApproval: await getSetting('chatApproval', false) };
+  });
+  app.put('/api/settings', async (req, reply) => {
+    if (!(await ownerOnly(req, reply))) return;
+    const { chatApproval } = z.object({ chatApproval: z.boolean() }).parse(req.body);
+    await db.setting.upsert({ where: { key: 'chatApproval' }, create: { key: 'chatApproval', value: chatApproval }, update: { value: chatApproval } });
+    await audit(db, 'owner', 'settings.chat_approval', undefined, { chatApproval });
+    return { chatApproval };
+  });
+
+  // ---------- التصميم داخل Claude: رسم HTML، فيديو من شرائح، استيراد من رابط ----------
+  const heavy = { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } };
+  async function ingestBuffer(buf: Buffer, filename: string, aiGenerated: boolean) {
+    return ingestUpload({ db, storage: c.storage, config: cfg, stream: Readable.from([buf]), filename, source: aiGenerated ? 'AI_GENERATED' : 'UPLOAD', aiGenerated });
+  }
+  const b64 = (b: Buffer) => b.toString('base64');
+  app.post('/api/media/render', heavy, async (req, reply) => {
+    const p = await need(req, reply, 'media:write'); if (!p) return;
+    const b = z.object({ html: z.string().min(1).max(300_000), width: z.number().int().min(320).max(2160).default(1080), height: z.number().int().min(320).max(3840).default(1920), aiGenerated: z.boolean().default(true) }).parse(req.body);
+    const jpeg = await renderHtmlToJpeg(b.html, { width: b.width, height: b.height });
+    const { asset, duplicate } = await ingestBuffer(jpeg, `design-${Date.now()}.jpg`, b.aiGenerated);
+    await audit(db, actorOf(p), 'media.rendered', asset.id, { duplicate });
+    return reply.code(201).send({ asset: mediaView(asset), duplicate, previewJpegBase64: b64(await thumbnail(jpeg, 540)) });
+  });
+  app.post('/api/media/slideshow', heavy, async (req, reply) => {
+    const p = await need(req, reply, 'media:write'); if (!p) return;
+    const b = z.object({ slides: z.array(z.string().min(1).max(300_000)).min(1).max(12).optional(), imageIds: z.array(z.string()).min(1).max(12).optional(),
+      secondsPerSlide: z.number().min(1).max(10).default(3), width: z.number().int().min(320).max(1080).default(1080), height: z.number().int().min(320).max(1920).default(1920), aiGenerated: z.boolean().default(true) })
+      .refine((v) => !!v.slides !== !!v.imageIds, 'أرسل slides (HTML) أو imageIds (صور مرفوعة) — واحداً فقط').parse(req.body);
+    const images: Buffer[] = [];
+    if (b.slides) for (const h of b.slides) images.push(await renderHtmlToJpeg(h, { width: b.width, height: b.height }));
+    else {
+      const assets = await db.mediaAsset.findMany({ where: { id: { in: b.imageIds }, deletedAt: null, kind: 'IMAGE' } });
+      if (assets.length !== new Set(b.imageIds).size) throw new SlideshowError('بعض الصور غير موجودة أو ليست صوراً');
+      for (const id of b.imageIds!) { const a = assets.find((x) => x.id === id)!; const chunks: Buffer[] = []; for await (const ch of await c.storage.get(a.storageKey)) chunks.push(ch as Buffer); images.push(Buffer.concat(chunks)); }
+    }
+    const mp4 = await makeSlideshow(images, { secondsPerSlide: b.secondsPerSlide, width: b.width, height: b.height });
+    const { asset, duplicate } = await ingestBuffer(mp4, `slideshow-${Date.now()}.mp4`, b.aiGenerated);
+    await audit(db, actorOf(p), 'media.slideshow', asset.id, { slides: images.length });
+    const frames = await extractFrames(c.storage, asset, 3, 360);
+    return reply.code(201).send({ asset: mediaView(asset), duplicate, previewFramesBase64: frames.map(b64) });
+  });
+  app.post('/api/media/import-url', heavy, async (req, reply) => {
+    const p = await need(req, reply, 'media:write'); if (!p) return;
+    const b = z.object({ url: z.string().url().max(2000), aiGenerated: z.boolean().default(false) }).parse(req.body);
+    const f = await fetchPublicMedia(b.url, { maxBytes: 4 * 1024 ** 3 });
+    const { asset, duplicate } = await ingestUpload({ db, storage: c.storage, config: cfg, stream: f.stream, filename: f.filename, source: b.aiGenerated ? 'AI_GENERATED' : 'UPLOAD', aiGenerated: b.aiGenerated });
+    await audit(db, actorOf(p), 'media.imported', asset.id, { host: new URL(b.url).host, duplicate });
+    return reply.code(201).send({ asset: mediaView(asset), duplicate });
+  });
+  /** لقطات مصغّرة لمحتوى مرفوع، ليراه Claude ويقيّمه قبل النشر */
+  app.get('/api/media/:id/preview', async (req, reply) => {
+    if (!(await need(req, reply, 'read'))) return;
+    const a = await db.mediaAsset.findUnique({ where: { id: (req.params as { id: string }).id } });
+    if (!a || a.deletedAt) return reply.code(404).send({ error: 'not_found', message: 'غير موجود' });
+    return { asset: mediaView(a), framesBase64: (await extractFrames(c.storage, a, a.kind === 'VIDEO' ? 3 : 1, 480)).map(b64) };
+  });
+
   // ---------- المنشورات ----------
   async function accountIdOf(explicit?: string) {
     if (explicit) return explicit;
@@ -265,6 +333,8 @@ export async function buildApi(c: Container, now: () => Date = () => new Date())
   });
   app.post('/api/posts/:id/approve', async (req, reply) => {
     const p = await need(req, reply, 'post:approve'); if (!p) return;
+    // الموافقة من المحادثة (رمز API) لا تعمل إلا إن فعّلها المالك صراحةً من اللوحة؛ الصلاحية وحدها لا تكفي
+    if (p.kind === 'token' && !(await getSetting('chatApproval', false))) return reply.code(403).send({ error: 'chat_approval_off', message: 'الموافقة من المحادثة معطّلة. فعّلها من اللوحة (الأمان)، أو وافق من رابط المنشور.' });
     const id = (req.params as { id: string }).id;
     const b = z.object({ contentHash: z.string().length(64), publishNow: z.boolean().default(false) }).parse(req.body);
     let post = await c.posts.approve(id, b.contentHash, actorOf(p));

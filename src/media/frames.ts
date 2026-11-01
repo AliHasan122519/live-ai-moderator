@@ -12,7 +12,7 @@ import type { Storage } from '../storage/types.js';
 const run = promisify(execFile);
 
 /** يستخرج حتى n إطاراً JPEG مصغّراً (≤1024px) لتحليل المحتوى: صورة واحدة للصور، ولقطات موزعة للفيديو. */
-export async function extractFrames(storage: Storage, a: Pick<MediaAsset, 'storageKey' | 'kind' | 'durationSec'>, n = 3): Promise<Buffer[]> {
+export async function extractFrames(storage: Storage, a: Pick<MediaAsset, 'storageKey' | 'kind' | 'durationSec'>, n = 3, width = 1024): Promise<Buffer[]> {
   const src = join(tmpdir(), `fr-${randomUUID()}`);
   const outs: string[] = [];
   try {
@@ -21,7 +21,7 @@ export async function extractFrames(storage: Storage, a: Pick<MediaAsset, 'stora
     const frames: Buffer[] = [];
     for (const [i, ts] of stamps.entries()) {
       const out = `${src}-${i}.jpg`; outs.push(out);
-      await run('ffmpeg', ['-v', 'error', '-y', ...(a.kind === 'VIDEO' ? ['-ss', ts.toFixed(2)] : []), '-i', src, '-frames:v', '1', '-vf', "scale='min(1024,iw)':-2", '-q:v', '4', out], { timeout: 30_000 });
+      await run('ffmpeg', ['-v', 'error', '-y', ...(a.kind === 'VIDEO' ? ['-ss', ts.toFixed(2)] : []), '-i', src, '-frames:v', '1', '-vf', `scale='min(${width},iw)':-2`, '-q:v', '4', out], { timeout: 30_000 });
       frames.push(await readFile(out));
     }
     return frames;

@@ -15,6 +15,12 @@ import { testConfig } from './helpers.js';
 
 const r = useRig();
 
+async function connect(url: string, headers?: Record<string, string>) {
+  const client = new Client({ name: 't', version: '1' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: headers ? { headers } : undefined }));
+  return client;
+}
+
 function webDir() {
   const d = mkdtempSync(join(tmpdir(), 'web-')); mkdirSync(join(d, 'account'));
   writeFileSync(join(d, 'index.html'), '<html>home</html>'); writeFileSync(join(d, 'account.html'), '<html>account</html>'); writeFileSync(join(d, '404.html'), '<html>nf</html>');
@@ -73,18 +79,13 @@ describe('خدمة واحدة: الواجهة + API + دخول بكلمة مرو
 });
 
 describe('MCP البعيد (HTTP)', () => {
-  async function connect(url: string, headers?: Record<string, string>) {
-    const client = new Client({ name: 't', version: '1' });
-    await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: headers ? { headers } : undefined }));
-    return client;
-  }
   it('يعمل بالترويسة وبالرمز في المسار، بلا upload_media، ويرفض الرموز الخاطئة/المُبطلة', async () => {
     const { app, base } = await boot(); await r.connect({ audited: true });
     const { token, id } = await createApiToken(r.db, 'phone', ['read', 'post:write', 'post:publish', 'media:write', 'ai:use']);
 
     const viaHeader = await connect(`${base}/mcp`, { authorization: `Bearer ${token}` });
     const names = (await viaHeader.listTools()).tools.map((t) => t.name);
-    expect(names).toContain('publish_tiktok_video'); expect(names).not.toContain('upload_media'); expect(names).not.toContain('approve_tiktok_post');
+    expect(names).toContain('publish_tiktok_video'); expect(names).not.toContain('upload_media'); expect(names).toContain('approve_tiktok_post'); // موجودة دائماً؛ الخادم يفرض الصلاحية + إعداد المالك
     const acc = await viaHeader.callTool({ name: 'get_tiktok_account_info', arguments: {} }) as { content: Array<{ text: string }> };
     expect(JSON.parse(acc.content[0]!.text)).toMatchObject({ connected: true, display_name: 'حساب تجريبي' });
 
@@ -111,4 +112,48 @@ describe('تفاصيل الواجهة الثابتة', () => {
     expect((await fetch(base + '/nope', { method: 'HEAD' })).status).toBe(404);
     await app.close();
   });
+});
+
+describe('السلسلة كاملة داخل Claude فقط (MCP بعيد): تصميم ← فيديو ← موافقة ← نشر ← تأكيد', () => {
+  it('Claude يصمّم صورة وفيديو ويرى المعاينة، يجهّز المنشور، وبعد تفعيل المالك يوافق وينشر حتى تأكيد TikTok', async () => {
+    const { app, base } = await boot(); await r.connect({ audited: true });
+    const { token } = await createApiToken(r.db, 'claude', ['read', 'media:write', 'post:write', 'post:approve', 'post:publish', 'ai:use']);
+    const cl = await connect(`${base}/mcp/${token}`);
+    const call = async (name: string, args: Record<string, unknown>) => (await cl.callTool({ name, arguments: args })) as { isError?: boolean; content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> };
+    const json = (x: { content: Array<{ text?: string }> }) => JSON.parse(x.content[0]!.text!);
+    const slide = (t: string, c: string) => `<html lang="ar" dir="rtl"><body style="margin:0;width:1080px;height:1920px;background:${c};display:grid;place-items:center;font:700 110px Tahoma,sans-serif;color:#fff">${t}</body></html>`;
+
+    // 1) صورة مصمَّمة: تعود معها صورة معاينة فعلية ليراها Claude
+    const img = await call('create_image_from_html', { html: slide('نصيحة اليوم', '#0a4') });
+    expect(img.isError).toBeFalsy(); expect(img.content.some((c) => c.type === 'image' && c.mimeType === 'image/jpeg' && (c.data?.length ?? 0) > 1000)).toBe(true);
+    expect(json(img)).toMatchObject({ kind: 'IMAGE', width: 1080, height: 1920, ai_generated: true });
+
+    // 2) فيديو من 3 شرائح + لقطات معاينة
+    const vid = await call('create_video_from_slides', { slides: [slide('١', '#c00'), slide('٢', '#06c'), slide('٣', '#a0a')], seconds_per_slide: 2 });
+    expect(vid.isError).toBeFalsy(); expect(vid.content.filter((c) => c.type === 'image')).toHaveLength(3);
+    const v = json(vid); expect(v.kind).toBe('VIDEO'); expect(v.duration_sec).toBeGreaterThan(4.7);
+
+    // 3) تجهيز → معاينة بلا نشر
+    const prep = json(await call('publish_tiktok_video', { media_id: v.media_id, caption: 'فيديو من تصميم Claude', hashtags: ['تقنية'], privacy_level: 'SELF_ONLY' }));
+    expect(prep).toMatchObject({ published: false, status: 'AWAITING_APPROVAL' }); expect(prep.preview.aiGenerated).toBe(true);
+
+    // 4) إعداد المالك مغلق ⇒ لا موافقة من المحادثة
+    const denied = await call('approve_tiktok_post', { post_id: prep.post_id, content_hash: prep.content_hash });
+    expect(denied.isError).toBe(true); expect(r.fake.hits('/v2/post/publish/video/init/')).toHaveLength(0);
+    // 5) المالك يفعّله ⇒ «انشر» تعمل
+    await r.db.setting.upsert({ where: { key: 'chatApproval' }, create: { key: 'chatApproval', value: true }, update: { value: true } });
+    const ap = json(await call('approve_tiktok_post', { post_id: prep.post_id, content_hash: prep.content_hash, publish_now: true }));
+    expect(ap).toMatchObject({ published: false, status: 'QUEUED' });
+    expect(await r.pub.run(prep.post_id)).toBe('sent');
+    // 6) لا «منشور» قبل تأكيد TikTok
+    expect(json(await call('get_tiktok_publish_status', { post_id: prep.post_id }))).toMatchObject({ status: 'PROCESSING', confirmed_by_tiktok: false });
+    expect(json(await call('get_tiktok_publish_status', { post_id: prep.post_id }))).toMatchObject({ status: 'PUBLISHED', confirmed_by_tiktok: true });
+    expect(r.fake.hits('/v2/post/publish/video/init/')[0]!.body.post_info.is_aigc).toBe(true);
+
+    // 7) استيراد من رابط: الداخلي محظور، ومعاينة ملف مرفوع تعيد لقطات
+    const ssrf = await call('import_media_from_url', { url: 'http://169.254.169.254/latest/meta-data' });
+    expect(ssrf.isError).toBe(true); expect(ssrf.content[0]!.text).toContain('محظور');
+    expect((await call('preview_media', { media_id: v.media_id })).content.filter((c) => c.type === 'image').length).toBe(3);
+    await cl.close(); await app.close();
+  }, 120_000);
 });

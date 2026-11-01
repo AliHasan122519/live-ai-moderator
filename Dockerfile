@@ -10,10 +10,13 @@ RUN npx prisma generate && cd web && npm run build && cd .. && rm -rf web/node_m
 
 FROM node:22-bookworm-slim
 # ffmpeg: فحص الفيديو واستخراج لقطات الذكاء الاصطناعي. openssl: مطلوب لمحرك Prisma
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+# fonts-noto-core: خط Noto Sans Arabic للتصاميم. Chromium (عبر playwright-core) لرسم HTML إلى صور
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg openssl ca-certificates fonts-noto-core fonts-noto-color-emoji && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV NODE_ENV=production HOST=0.0.0.0 WEB_DIR=/app/web/out
 COPY --from=build /app /app
+RUN npx playwright-core install --with-deps chromium
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||4000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["sh", "-c", "npx prisma migrate deploy && exec npx tsx src/api/main.ts"]

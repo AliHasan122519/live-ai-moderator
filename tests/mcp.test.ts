@@ -109,8 +109,12 @@ describe('خادم MCP', () => {
     const prep = await weak.call('publish_tiktok_video', { media_id: v, caption: 'ب' });
     const denied = await weak.call('approve_tiktok_post', { post_id: prep.data.post_id, content_hash: prep.data.content_hash });
     expect(denied.isError).toBe(true); expect(denied.text).toContain('post:approve'); await weak.close();
-    // 2) رمز كامل: بصمة خاطئة ترفض، الصحيحة تقبل وتبدأ الإرسال دون ادعاء النشر
+    // 2) رمز كامل لكن إعداد المالك «الموافقة من المحادثة» مغلق ⇒ مرفوض
     const strong = await rigMcp({ enableApproval: true, scopes: ALL_SCOPES });
+    const off = await strong.call('approve_tiktok_post', { post_id: prep.data.post_id, content_hash: prep.data.content_hash });
+    expect(off.isError).toBe(true); expect(off.text).toContain('معطّلة');
+    await r.db.setting.upsert({ where: { key: 'chatApproval' }, create: { key: 'chatApproval', value: true }, update: { value: true } });
+    // 3) بعد تفعيل المالك: بصمة خاطئة ترفض، الصحيحة تقبل وتبدأ الإرسال دون ادعاء النشر
     expect((await strong.call('approve_tiktok_post', { post_id: prep.data.post_id, content_hash: 'c'.repeat(64) })).isError).toBe(true);
     const ap = await strong.call('approve_tiktok_post', { post_id: prep.data.post_id, content_hash: prep.data.content_hash });
     expect(ap.data).toMatchObject({ published: false, status: 'QUEUED' });
