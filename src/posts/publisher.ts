@@ -181,7 +181,11 @@ export class Publisher {
       }
     } catch (e) {
       if (age > this.o.processingTimeoutMs) { await this.unknown(post, `تعذّر التحقق من الحالة: ${reasonAr(e)}`); return 'UNKNOWN'; }
-      await this.queue.enqueuePoll(postId, 30_000); // خطأ عابر في الاستعلام نفسه: نعيد لاحقاً
+      // لا نبتلع الخطأ: يُسجَّل في أحداث المنشور (مرة لكل رسالة مختلفة) ليظهر للمالك سبب بقاء الحالة معلّقة
+      const msg = reasonAr(e);
+      const last = await this.db.postEvent.findFirst({ where: { postId, event: 'status_check_error' }, orderBy: { at: 'desc' } });
+      if ((last?.detail as { message?: string } | null)?.message !== msg) await this.posts.event(postId, 'worker', 'status_check_error', { message: msg });
+      await this.queue.enqueuePoll(postId, 30_000);
       return 'PROCESSING';
     }
   }

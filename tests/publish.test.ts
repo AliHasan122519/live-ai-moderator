@@ -278,3 +278,17 @@ describe('الجدولة', () => {
     await r.pub.sweep(); expect(await statusOf(id)).toBe('UNKNOWN');
   });
 });
+
+describe('شفافية أخطاء المتابعة', () => {
+  it('خطأ في استعلام الحالة لا يُبتلع: يظهر في أحداث المنشور مرة واحدة لكل رسالة', async () => {
+    await r.connect({ audited: true });
+    const id = await r.newApproved([await r.seedMedia('VIDEO')]);
+    await r.posts.publishNow(id, 'owner'); await r.pub.run(id);
+    r.fake.injectError('/v2/post/publish/status/fetch/', 500, { error: { code: 'internal_error', message: 'oops' } }, false);
+    expect(await r.pub.checkStatus(id)).toBe('PROCESSING'); expect(await r.pub.checkStatus(id)).toBe('PROCESSING');
+    const evs = await r.db.postEvent.findMany({ where: { postId: id, event: 'status_check_error' } });
+    expect(evs).toHaveLength(1); expect(JSON.stringify(evs[0]!.detail)).toContain('internal_error');
+    r.fake.injected.length = 0;
+    await r.pub.checkStatus(id); expect(await r.pub.checkStatus(id)).toBe('PUBLISHED');
+  });
+});
